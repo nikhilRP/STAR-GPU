@@ -310,7 +310,7 @@ int main(int argc, char* argv[])
             nvbio::star::cuda::driver( argv[argc-1], *reference_data, *driver_data, *read_data_file, string_options );
         }
 
-        log_info( stderr, "nvBowtie... done\n" );
+        log_info( stderr, "STAR... done\n" );
     }
     catch (nvbio::cuda_error &e)
     {

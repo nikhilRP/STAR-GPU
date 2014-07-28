@@ -89,6 +89,8 @@ int driver(
           io::SequenceDataStream&            read_data_stream2,
     const std::map<std::string,std::string>& options)
 {
+    log_visible(stderr, "STAR cuda driver... started\n");
+    log_visible(stderr, "STAR cuda driver... done\n");
     return 0;
 }
 
