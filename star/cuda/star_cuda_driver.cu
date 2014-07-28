@@ -1,9 +1,32 @@
 //#define NVBIO_ENABLE_PROFILING
 
 #define MOD_NAMESPACE
-#define MOD_NAMESPACE_BEGIN namespace spp { namespace driver {
+#define MOD_NAMESPACE_BEGIN namespace star { namespace driver {
 #define MOD_NAMESPACE_END   }}
-#define MOD_NAMESPACE_NAME spp::driver
+#define MOD_NAMESPACE_NAME star::driver
+
+#include <nvbio/basic/cuda/arch.h>
+#include <nvbio/basic/timer.h>
+#include <nvbio/basic/console.h>
+#include <nvbio/basic/options.h>
+#include <nvbio/basic/threads.h>
+#include <nvbio/basic/html.h>
+#include <nvbio/basic/dna.h>
+#include <nvbio/fmindex/bwt.h>
+#include <nvbio/fmindex/ssa.h>
+#include <nvbio/fmindex/fmindex.h>
+#include <nvbio/fmindex/fmindex_device.h>
+#include <thrust/host_vector.h>
+#include <thrust/device_vector.h>
+#include <thrust/scan.h>
+#include <thrust/sort.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <vector>
+#include <algorithm>
+#include <numeric>
+#include <functional>
 
 #include "star_cuda_driver.h"
 #include "input_thread.h"
@@ -12,14 +35,19 @@ namespace nvbio {
 namespace star {
 namespace cuda {
 
-int driver(io::SequenceDataStream& read_data_stream1)
+int driver(
+    const char*                              output_name, 
+    const io::SequenceData&                  reference_data_host,
+    const io::FMIndexData&                   driver_data_host,
+          io::SequenceDataStream&            read_data_stream,
+    const std::map<std::string,std::string>& options)
 {
     log_visible(stderr, "STAR cuda driver... started\n");
 
     uint32 BATCH_SIZE = 500000;
 
     // setup the input thread
-    InputThread input_thread( &read_data_stream1, BATCH_SIZE );
+    InputThread input_thread( &read_data_stream, BATCH_SIZE );
     input_thread.create();
 
     uint32 input_set  = 0;
@@ -46,6 +74,21 @@ int driver(io::SequenceDataStream& read_data_stream1)
         printf("Count - %d\n", read_data1.size());
     }
     log_visible(stderr, "STAR cuda driver... done\n");
+    return 0;
+}
+
+//
+// paired-end driver
+//
+int driver(
+    const char*                              output_name, 
+    const io::SequenceData&                  reference_data_host,
+    const io::FMIndexData&                   driver_data_host,
+    const io::PairedEndPolicy                pe_policy,
+          io::SequenceDataStream&            read_data_stream1,
+          io::SequenceDataStream&            read_data_stream2,
+    const std::map<std::string,std::string>& options)
+{
     return 0;
 }
 

@@ -16,6 +16,8 @@
 #include <nvbio/io/sequence/sequence.h>
 #include <nvbio/basic/shared_pointer.h>
 #include <nvbio/io/fmindex/fmindex.h>
+#include <nvbio/io/sequence/sequence.h>
+#include <nvbio/io/sequence/sequence_mmap.h>
 
 #include "cuda/star_cuda_driver.h"
 
@@ -32,6 +34,20 @@ namespace cuda {
 
 using namespace nvbio;
 
+bool is_number(const char* str)
+{
+    if (str[0] == '-')
+        ++str;
+
+    for (;*str != '\0'; ++str)
+    {
+        if (*str < '0' ||
+            *str > '9')
+            return false;
+    }
+    return true;
+}
+
 int main(int argc, char* argv[])
 {
     cudaSetDeviceFlags( cudaDeviceMapHost | cudaDeviceLmemResizeToMax );
@@ -42,11 +58,119 @@ int main(int argc, char* argv[])
         (argc == 2 && strcmp( argv[1], "-h" ) == 0))
     {
         log_info(stderr,"star [options] reference-genome read-file output\n");
+        log_info(stderr,"options:\n");
+        log_info(stderr,"  General:\n");
+        log_info(stderr,"    --max-reads        int [-1]      maximum number of reads to process\n");
+        log_info(stderr,"    --device           int [0]       select the given cuda device\n");
+        log_info(stderr,"    --file-ref                       load reference from file\n");
+        log_info(stderr,"    --server-ref                     load reference from server\n");
+        log_info(stderr,"    --phred33                        qualities are ASCII characters equal to Phred quality + 33\n");
+        log_info(stderr,"    --phred64                        qualities are ASCII characters equal to Phred quality + 64\n");
+        log_info(stderr,"    --solexa-quals                   qualities are in the Solexa format\n");
+        log_info(stderr,"    --pe                             paired ends input\n");
+        log_info(stderr,"    --ff                             paired mates are forward-forward\n");
+        log_info(stderr,"    --fr                             paired mates are forward-reverse\n");
+        log_info(stderr,"    --rf                             paired mates are reverse-forward\n");
+        log_info(stderr,"    --rr                             paired mates are reverse-reverse\n");
+        log_info(stderr,"    --verbosity                      verbosity level\n");
         exit(0);
     }
 
-    //bool   debug      = false;
-    int cuda_device  = -1;
+    uint32 max_reads    = uint32(-1);
+    uint32 max_read_len = uint32(-1);
+    //bool   debug        = false;
+    int    cuda_device  = -1;
+    bool   from_file    = false;
+    bool   paired_end   = false;
+    io::PairedEndPolicy pe_policy = io::PE_POLICY_FF;
+    io::QualityEncoding qencoding = io::Phred33;
+
+    std::map<std::string,std::string> string_options;
+
+    for (int32 i = 1; i < argc; ++i)
+    {
+        if (strcmp( argv[i], "--pe" ) == 0 ||
+            strcmp( argv[i], "-paired-ends" ) == 0 ||
+            strcmp( argv[i], "--paired-ends" ) == 0)
+            paired_end = true;
+        else if (strcmp( argv[i], "--ff" ) == 0)
+            pe_policy = io::PE_POLICY_FF;
+        else if (strcmp( argv[i], "--fr" ) == 0)
+            pe_policy = io::PE_POLICY_FR;
+        else if (strcmp( argv[i], "--rf" ) == 0)
+            pe_policy = io::PE_POLICY_RF;
+        else if (strcmp( argv[i], "--rr" ) == 0)
+            pe_policy = io::PE_POLICY_RR;
+        else if (strcmp( argv[i], "-max-reads" ) == 0 ||
+                 strcmp( argv[i], "--max-reads" ) == 0)
+            max_reads = atoi( argv[++i] );
+        else if (strcmp( argv[i], "-max-read-len" ) == 0 ||
+                 strcmp( argv[i], "--max-read-len" ) == 0)
+            max_read_len = atoi( argv[++i] );
+        else if (strcmp( argv[i], "-file-ref" ) == 0 ||
+                 strcmp( argv[i], "--file-ref" ) == 0)
+            from_file = true;
+        else if (strcmp( argv[i], "-server-ref" ) == 0 ||
+                 strcmp( argv[i], "--server-ref" ) == 0)
+            from_file = false;
+        else if (strcmp( argv[i], "-input" ) == 0 ||
+                 strcmp( argv[i], "--input" ) == 0)
+        {
+            if (strcmp( argv[i+1], "file" ) == 0)
+                from_file = true;
+            else if (strcmp( argv[i+1], "server" ) == 0)
+                from_file = false;
+            else
+                log_warning(stderr, "unknown \"%s\" input, skipping\n", argv[i+1]);
+
+            ++i;
+        }
+        else if (strcmp( argv[i], "-phred33" ) == 0 ||
+                 strcmp( argv[i], "--phred33" ) == 0)
+            qencoding = io::Phred33;
+        else if (strcmp( argv[i], "-phred64" ) == 0 ||
+                 strcmp( argv[i], "--phred64" ) == 0)
+            qencoding = io::Phred64;
+        else if (strcmp( argv[i], "-solexa-quals" ) == 0 ||
+                 strcmp( argv[i], "--solexa-quals" ) == 0)
+            qencoding = io::Solexa;
+        else if (strcmp( argv[i], "-device" ) == 0 ||
+                 strcmp( argv[i], "--device" ) == 0)
+            cuda_device = atoi( argv[++i] );
+        else if (strcmp( argv[i], "-verbosity" ) == 0 ||
+                 strcmp( argv[i], "--verbosity" ) == 0)
+            set_verbosity( Verbosity( atoi( argv[++i] ) ) );
+        else if (argv[i][0] == '-')
+        {
+            // add unknown option to the string options
+            const std::string key = std::string( argv[i][1] == '-' ? argv[i] + 2 : argv[i] + 1 );
+            const char* next = argv[i+1];
+
+            if (is_number(next) || next[0] != '-')
+            {
+                const std::string val = std::string( next ); ++i;
+                string_options.insert( std::make_pair( key, val ) );
+            }
+            else
+                string_options.insert( std::make_pair( key, "1" ) );
+        }
+    }
+
+    log_info(stderr, "STAR... started\n");
+    log_debug(stderr, "  %-16s : %d\n", "max-reads",  max_reads);
+    log_debug(stderr, "  %-16s : %d\n", "max-length", max_read_len);
+    log_debug(stderr, "  %-16s : %s\n", "quals", qencoding == io::Phred33 ? "phred33" :
+                                                 qencoding == io::Phred64 ? "phred64" :
+                                                                            "solexa");
+    if (paired_end)
+    {
+        log_debug(stderr, "  %-16s : %s\n", "pe-policy",
+            pe_policy == io::PE_POLICY_FF ? "ff" :
+            pe_policy == io::PE_POLICY_FR ? "fr" :
+            pe_policy == io::PE_POLICY_RF ? "rf" :
+                                            "rr" );
+    }
+
     int device_count;
     cudaGetDeviceCount(&device_count);
     log_verbose(stderr, "  cuda devices : %d\n", device_count);
@@ -82,45 +206,111 @@ int main(int argc, char* argv[])
         cudaSetDevice( cuda_device );
     }
 
-    io::QualityEncoding qencoding = io::Phred33;
-    int arg = 1;
+    uint32 arg_offset = paired_end ? argc-4 : argc-3;
+
     try
     {
-        log_visible(stderr, "loading reference index... started\n");
-        log_info(stderr, "  file: \"%s\"\n", argv[arg]);
+        SharedPointer<nvbio::io::SequenceData> reference_data;
+        SharedPointer<nvbio::io::FMIndexData>  driver_data;
 
-        // load the reference data
-        reference_data = io::load_sequence_file( DNA, argv[arg] );
-        if (reference_data == NULL)
+        if (from_file)
         {
-            log_error(stderr, "unable to load reference index \"%s\"\n", argv[arg]);
-            return 1;
+            log_visible(stderr, "loading reference index... started\n");
+            log_info(stderr, "  file: \"%s\"\n", argv[arg_offset]);
+
+            // load the reference data
+            reference_data = io::load_sequence_file( DNA, argv[arg_offset] );
+            if (reference_data == NULL)
+            {
+                log_error(stderr, "unable to load reference index \"%s\"\n", argv[arg_offset]);
+                return 1;
+            }
+
+            log_visible(stderr, "loading reference index... done\n");
+
+            nvbio::io::FMIndexDataHost* loader = new nvbio::io::FMIndexDataHost;
+            if (!loader->load( argv[arg_offset] ))
+                return 1;
+
+            driver_data = loader;
+        }
+        else
+        {
+            log_visible(stderr, "mapping reference index... started\n");
+            log_info(stderr, "  file: \"%s\"\n", argv[arg_offset]);
+
+            // map the reference data
+            reference_data = io::map_sequence_file( argv[arg_offset] );
+            if (reference_data == NULL)
+            {
+                log_error(stderr, "mapping reference index \"%s\" failed\n", argv[arg_offset]);
+                return 1;
+            }
+
+            log_visible(stderr, "mapping reference index... done\n");
+
+            nvbio::io::FMIndexDataMMAP* loader = new nvbio::io::FMIndexDataMMAP;
+            if (!loader->load( argv[arg_offset] ))
+                return 1;
+
+            driver_data = loader;
         }
 
-        log_visible(stderr, "loading reference index... done\n");
-        nvbio::io::FMIndexDataHost* loader = new nvbio::io::FMIndexDataHost;
-        if (!loader->load( argv[arg] ))
-            return 1;
-        driver_data = loader;
-
-        const char *read_file_name= argv[arg+1];
-
-        log_visible(stderr, "opening read file [1] \"%s\"\n", read_file_name);
-        SharedPointer<nvbio::io::SequenceDataStream> read_data_file(
-            nvbio::io::open_sequence_file(read_file_name,
-                qencoding,
-                uint32(-1),
-                uint32(-1),
-                io::REVERSE)
+        if (paired_end)
+        {
+            log_visible(stderr, "opening read file [1] \"%s\"\n", argv[arg_offset+1]);
+            SharedPointer<nvbio::io::SequenceDataStream> read_data_file1(
+                nvbio::io::open_sequence_file(argv[arg_offset+1],
+                                          qencoding,
+                                          max_reads,
+                                          max_read_len,
+                                          io::REVERSE)
             );
 
-        if (read_data_file == NULL || read_data_file->is_ok() == false)
+            if (read_data_file1 == NULL || read_data_file1->is_ok() == false)
+            {
+                log_error(stderr, "unable to open read file \"%s\"\n", argv[arg_offset+1]);
+                return 1;
+            }
+
+            log_visible(stderr, "opening read file [2] \"%s\"\n", argv[arg_offset+2]);
+            SharedPointer<nvbio::io::SequenceDataStream> read_data_file2(
+                nvbio::io::open_sequence_file(argv[arg_offset+2],
+                                          qencoding,
+                                          max_reads,
+                                          max_read_len,
+                                          io::REVERSE)
+            );
+
+            if (read_data_file2 == NULL || read_data_file2->is_ok() == false)
+            {
+                log_error(stderr, "unable to open read file \"%s\"\n", argv[arg_offset+2]);
+                return 1;
+            }
+
+            nvbio::star::cuda::driver( argv[argc-1], *reference_data, *driver_data, pe_policy, *read_data_file1, *read_data_file2, string_options );
+        }
+        else
         {
-            log_error(stderr, "unable to open read file \"%s\"\n", read_file_name);
-            return 1;
+            log_visible(stderr, "opening read file \"%s\"\n", argv[arg_offset+1]);
+            SharedPointer<nvbio::io::SequenceDataStream> read_data_file(
+                nvbio::io::open_sequence_file(argv[arg_offset+1],
+                                          qencoding,
+                                          max_reads,
+                                          max_read_len,
+                                          io::REVERSE)
+            );
+
+            if (read_data_file == NULL || read_data_file->is_ok() == false)
+            {
+                log_error(stderr, "unable to open read file \"%s\"\n", argv[arg_offset+1]);
+                return 1;
+            }
+
+            nvbio::star::cuda::driver( argv[argc-1], *reference_data, *driver_data, *read_data_file, string_options );
         }
 
-        nvbio::star::cuda::driver( *read_data_file);
+        log_info( stderr, "nvBowtie... done\n" );
     }
     catch (nvbio::cuda_error &e)
     {
