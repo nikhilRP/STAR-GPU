@@ -7,6 +7,6 @@ CUDA implementation of STAR aligner.
 
 Changes from nvBowtie:
 
-* Seeding (Maximum mapability length), in other words exact match of substring of the read.
+* Seeding (Maximum mapability length), in other words exact match of max substring of the read.
 * Scoring is done by Sharon Entropy principle
-* Splice junction calculation?
+* Splice junction calculation? (for later stages)
