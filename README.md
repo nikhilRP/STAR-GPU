@@ -7,6 +7,6 @@ CUDA implementation of STAR aligner.
 
 Changes from nvBowtie:
 
-* Spliced alignments are the biggest challenege and the difference compared to Bowtie2
+* Spliced alignments are the biggest challenege and the difference.
 * Seeding (Maximum mapability length), in other words exact match of biggest substring of the read.
-* Scoring is done by Sharon Entropy principle
+* Scoring is done by Sharon Entropy principle.
