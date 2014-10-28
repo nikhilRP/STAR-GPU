@@ -1,4 +1,4 @@
-STAR-GPU
+STAR-GPU (Still in Development)
 ========
 
 CUDA implementation of STAR aligner.
